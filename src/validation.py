@@ -35,17 +35,10 @@ class PurgedTimeSeriesSplit:
         # Calculate size of each test fold
         test_size = n_samples // (self.n_splits + 1)
         
-        # Determine fixed embargo size
-        if self.embargo_td is not None:
-            embargo_size = self.embargo_td
-        else:
-            embargo_size = int(n_samples * self.embargo_pct)
-            
         for i in range(self.n_splits):
-            # In split i, test fold starts after (i + 1) train/test blocks
-            # Standard Walk-Forward split:
-            # Train: 0 to start_test
-            # Test: start_test to end_test
+            # Strict walk-forward split: every training observation precedes its
+            # test fold. This makes the evaluation representative of information
+            # that would have been available at the time of the prediction.
             start_test = (i + 1) * test_size
             end_test = start_test + test_size
             if i == self.n_splits - 1:
@@ -53,33 +46,11 @@ class PurgedTimeSeriesSplit:
                 
             test_indices = indices[start_test:end_test]
             
-            # Train indices before test
-            train_indices_before = indices[0:start_test]
-            # Purge the end of the train set before the test set starts
-            # We must remove any training indices in [start_test - horizon + 1, start_test]
+            # Purge observations whose forward-return label overlaps the first
+            # test observation. No post-test rows are used in walk-forward mode,
+            # so an embargo after the test set is not applicable here.
             purge_start = max(0, start_test - self.horizon + 1)
-            train_indices_before = train_indices_before[train_indices_before < purge_start]
-            
-            # Train indices after test (in K-fold validation style, if we used future data, we would include them)
-            # In TimeSeriesSplit, we only use past data.
-            # But let's check if we want to allow future training (like in Purged K-Fold).
-            # To be general and follow Marcos Lopez de Prado's Purged K-Fold, we can split the indices into K blocks.
-            # In block i, test is block i, and train is all other blocks (before and after), but purged.
-            # Let's implement BOTH: standard Walk-Forward Purged, and Purged K-Fold.
-            # A Purged K-Fold is much more sample efficient and allows testing multiple paths.
-            # Let's write the Purged K-Fold splits!
-            # For each fold i, the test set is block i.
-            # The train set is all other blocks, but we purge:
-            # - [start_test - horizon + 1, end_test + embargo_size]
-            
-            train_indices = np.setdiff1d(indices, test_indices)
-            
-            # Apply purging and embargo: remove any training index in [start_test - horizon + 1, end_test + embargo_size]
-            purge_embargo_start = max(0, start_test - self.horizon + 1)
-            purge_embargo_end = min(n_samples, end_test + embargo_size)
-            
-            leakage_indices = np.arange(purge_embargo_start, purge_embargo_end)
-            train_indices = np.setdiff1d(train_indices, leakage_indices)
+            train_indices = indices[:purge_start]
             
             yield train_indices, test_indices
             

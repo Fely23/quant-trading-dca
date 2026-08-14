@@ -92,7 +92,7 @@ class DynamicDCASimulator:
         master_data = yf.download("QQQ", start=start_date, end=end_date)
         master_index = master_data.index
         
-        df_prices = pd.concat(df_list, axis=1).reindex(master_index).ffill().bfill()
+        df_prices = pd.concat(df_list, axis=1, sort=False).reindex(master_index).ffill().bfill()
         return df_prices
 
     def simulate(
@@ -127,6 +127,7 @@ class DynamicDCASimulator:
         shares = {t: 0.0 for t in self.tickers}
         portfolio_values = []
         nav_values = []
+        allocation_history = []
         injected_cash_flow = []
         cash_flow_dates = []
         
@@ -163,6 +164,8 @@ class DynamicDCASimulator:
                 
                 # Compute Target Weights
                 if strategy_type == 'static':
+                    if static_weights is None:
+                        raise ValueError("static_weights is required when strategy_type='static'")
                     target_weights = {ticker: static_weights.get(ticker, 0.0) for ticker in self.tickers}
                     
                 elif strategy_type == 'momentum':
@@ -196,6 +199,14 @@ class DynamicDCASimulator:
                     
                 else:
                     raise ValueError(f"Unknown strategy type: {strategy_type}")
+
+                total_weight = sum(target_weights.values())
+                if not np.isclose(total_weight, 1.0):
+                    raise ValueError(
+                        f"Target weights must sum to 1.0; received {total_weight:.6f}"
+                    )
+
+                allocation_history.append({'date': date, **target_weights})
                     
                 # Rebalance math taking transaction costs into account:
                 # Target allocation in USD: target_alloc = W * V_net
@@ -226,6 +237,8 @@ class DynamicDCASimulator:
         df_sim = pd.DataFrame(index=sim_dates)
         df_sim['portfolio_value'] = portfolio_values
         df_sim['nav'] = nav_values
+        weights_df = pd.DataFrame(allocation_history).set_index('date')
+        weights_df.index.name = 'date'
         
         # Add final positive cash flow for IRR
         injected_cash_flow.append(current_value)
@@ -246,6 +259,7 @@ class DynamicDCASimulator:
         
         return {
             'df': df_sim,
+            'weights': weights_df,
             'total_injected': total_injected,
             'final_value': current_value,
             'net_profit': net_profit,
@@ -304,6 +318,11 @@ def main():
     for name, res in results.items():
         print(f"{name:<30} | ${res['total_injected']:<9.2f} | ${res['final_value']:<11.2f} | ${res['net_profit']:<9.2f} | {res['roi']:<7.2%} | {res['irr']:<9.2%} | {res['max_dd']:<7.2%} | {res['sharpe']:<6.3f}")
     print("="*90)
+
+    # Make the monthly target allocations auditable.
+    for name, res in results.items():
+        print(f"\nPESOS OBJETIVO MENSUALES — {name}")
+        print(res['weights'].round(4).to_string())
     
     # Plot equity curves
     plt.figure(figsize=(12, 6))
